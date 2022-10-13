@@ -18,8 +18,7 @@ export JIRA_AUTH_APP_CLIENT_SECRET=<MY_CLIENT_SECRET_FROM_JIRA_APP>
 
 # Running
 
-```
-## let's run and test
 ```bash
+## let's run and test
 go run main.go
 ```
