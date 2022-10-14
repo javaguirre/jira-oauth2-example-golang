@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -14,20 +15,22 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// https://0498-80-30-219-83.eu.ngrok.io/plugins/jira/oauth/connect
-// Scopes: OAuth 2.0 scopes provide a way to limit the amount of access that is granted to an access token.
+type AccessibleResources []struct {
+	Id string
+}
+
 var jiraOauthConfig = &oauth2.Config{
 	RedirectURL:  os.Getenv("JIRA_URL_CALLBACK"),
 	ClientID:     os.Getenv("JIRA_AUTH_APP_CLIENT_ID"),
 	ClientSecret: os.Getenv("JIRA_AUTH_APP_CLIENT_SECRET"),
-	Scopes:       []string{"read:me", "read:jira-work", "write:jira-work"},
+	Scopes:       []string{"read:me", "read:jira-work", "write:jira-work", "read:jira-user"},
 	Endpoint: oauth2.Endpoint{
 		AuthURL:  "https://auth.atlassian.com/authorize",
 		TokenURL: "https://auth.atlassian.com/oauth/token",
 	},
 }
 
-const jiraOauthURL = "https://api.atlassian.com/me"
+const jiraOauthURL = "https://api.atlassian.com/ex/jira/%s/%s"
 
 func oauthJiraLogin(w http.ResponseWriter, r *http.Request) {
 
@@ -86,32 +89,62 @@ func generateStateOauthCookie(w http.ResponseWriter) string {
 
 func getUserDataFromJira(code string) ([]byte, error) {
 	// Use code to get token and get user info from Google.
-
 	token, err := jiraOauthConfig.Exchange(context.Background(), code)
 	if err != nil {
 		return nil, fmt.Errorf("code exchange wrong: %s", err.Error())
 	}
 
+	// GET APP ID
 	request, err := http.NewRequest(
 		"GET",
-		jiraOauthURL,
+		"https://api.atlassian.com/oauth/token/accessible-resources",
 		nil,
 	)
 	if err != nil {
-		panic("ERRRORR in request")
+		return nil, fmt.Errorf("failed getting request")
 	}
 
-	request.Header.Set("Authorization", "Bearer "+token.AccessToken)
-	client := &http.Client{}
+	ctx := context.Background()
+	tokenSource := jiraOauthConfig.TokenSource(ctx, token)
+	client := oauth2.NewClient(ctx, tokenSource)
+
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("failed getting user info: %s", err.Error())
+		return nil, fmt.Errorf("failed getting accessible resources: %s", err.Error())
 	}
 
 	defer response.Body.Close()
 	contents, err := ioutil.ReadAll(response.Body)
 	if err != nil {
+		return nil, fmt.Errorf("failed read accesible resources response: %s", err.Error())
+	}
+
+	var resp AccessibleResources
+	err = json.Unmarshal(contents, &resp)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed marshall: %s", err.Error())
+	}
+
+	request, err = http.NewRequest(
+		"GET",
+		fmt.Sprintf(jiraOauthURL, resp[0].Id, "rest/api/2/myself"),
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed getting request myself req")
+	}
+
+	response, err = client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("failed getting user info: %s", err.Error())
+	}
+
+	defer response.Body.Close()
+	contents, err = ioutil.ReadAll(response.Body)
+	if err != nil {
 		return nil, fmt.Errorf("failed read response: %s", err.Error())
 	}
+
 	return contents, nil
 }
